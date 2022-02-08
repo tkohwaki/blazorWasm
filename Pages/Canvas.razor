@@ -1,0 +1,279 @@
+
+<!--
+    Blazor Javascript Interopサンプル
+    Canvas描画
+        Coded by T.Ohwaki
+-->
+@page "/Canvas"
+@using System.Threading
+@inject IJSRuntime JSRuntime
+
+<h1>Canvas(Javascript Interop)</h1>
+<br/>
+<p style="font-size:small">
+BlazorのWeb Assembly版です。<br/>
+ページロード後は、Webサーバとの通信は行わず、クライアント(ブラウザ)のみで動作します。<br/>
+ちなみに、このページはC#のコードから、Javascriptを呼び出して、Canvas描画を行っています。<br/>
+Javascriptと言っても、座標移動や、線描などの単純APIをラッピングした関数群を用意して、<br/>
+C#コードから座標や色などを引数として呼び出しているだけです。<br/>
+<a href="showsrc.php?FileName=Canvas.razor&Return=canvas">ソース</a>
+</p>
+描画色：<input type="color" @bind="DrawColor"/><br/>
+線幅：<input type="range" @bind="DrawWidth" min="1" max="20"/>&nbsp;&nbsp;<span>@DrawWidth</span><br/>
+塗潰：<input type="checkbox" checked="@ModeFill" @onchange="DrawModeChanged"/><br/>
+<button class="btn btn-primary" @onclick="changeGetColorMode">スポイト</button>&nbsp;&nbsp;@modeText
+<br/>
+<br/>
+<!-- Canvas -->
+<canvas id="myCanvas" width="@canvasWidth" height="@canvasHeight" 
+    @onmousedown="OnCanvasMouseDown"
+    @onmouseup="OnCanvasMouseUp"
+    @onmousemove="OnCanvasMouseMove"
+    @ontouchstart="OnTouchStart"
+    @ontouchend="OnTouchEnd"
+    @ontouchmove="OnTouchMove"
+    style="border-style:solid;border-color:black;border-width:1px">
+</canvas>
+<br/>
+<br/>
+<button class="btn btn-primary" @onclick="TimerBtnClick">@btnText</button>&nbsp;&nbsp;
+<button class="btn btn-primary" @onclick="OneShotBtnClick">One Shot</button><br/><br/>
+<button class="btn btn-primary" @onclick="ClearBtnClick">Clear</button>&nbsp;&nbsp;
+<button class="btn btn-primary" @onclick="SaveAsFile">Save</button>&nbsp;&nbsp;
+<br/>
+<br/>
+<pre>@mesg</pre>
+
+@code {
+
+    // Canvas Size
+    const int canvasWidth = 640;
+    const int canvasHeight = 480;
+    // Button Text
+    const string TIMER_START = "Start Draw";
+    const string TIMER_STOP = "Stop Draw";
+    private string btnText;
+    // 描画タイマー
+    private Timer tmDraw;
+    // メッセージ
+    private string mesg = "";
+    // Canvasの位置情報
+    private double CanvasLeft = 0.0;
+    private double CanvasTop = 0.0;
+    // ペン描画中フラグ
+    private bool Pendown = false;
+    // 描画色
+    private string DrawColor = "#000000";
+    // 描画ペンサイズ
+    private int DrawWidth = 1;
+    // 塗潰しフラグ
+    private bool ModeFill = false;
+
+    private bool SpoitMode = false;
+
+    private string modeText = "";
+    
+    // ページロード完了時イベントハンドラ
+    protected override void OnInitialized() {
+        btnText = TIMER_START;
+    }
+
+    // コンポーネントレンダー完了時イベントハンドラ
+    //  Javascriptを呼び出すにはこのイベントハンドラ以降に行う必要がある
+    protected override async Task OnAfterRenderAsync(bool firstRender) {
+        if (firstRender) {
+            // Canvasの位置・サイズ情報を取得(JSCall)
+            var retobj = await JSRuntime.InvokeAsync<ElementRect>("GetElementRect","myCanvas");
+            CanvasLeft = retobj.left;
+            CanvasTop = retobj.top;
+        }
+    }
+
+    // Canvas上のポジション計算
+    //  マウスイベントの座標はブラウザ相対になるため、Canvasの相対に変換する
+    private (double,double) GetDrawPos(double x, double y) {
+        return (x-CanvasLeft,y-CanvasTop);
+    }
+
+    // Timer Start/Stopボタンクリックイベントハンドラ
+    protected void TimerBtnClick() {
+        if (btnText == TIMER_START) {
+            btnText = TIMER_STOP;
+            tmDraw = new Timer(async (_)=>await DrawFunc(),null,0,200);
+        } else {
+            tmDraw.Change(0,0);
+            btnText = TIMER_START;
+        }
+    }
+
+    // ランダム図形描画
+    private async Task DrawFunc() {
+        Random rnd = new Random();
+        int top = rnd.Next(canvasHeight);
+        int left = rnd.Next(canvasWidth);
+        int width = rnd.Next(180) + 20;
+        int height = rnd.Next(180) + 20;
+        int r = rnd.Next(80) + 20;
+        int rgb = rnd.Next(0xffffff+1);
+        string color = $"#{rgb.ToString("x6")}";
+        int kind = rnd.Next(3);
+        if (kind == 0) {
+            await JSRuntime.InvokeVoidAsync("FillRect","myCanvas",top,left,width,height,color);
+        } else if (kind == 1) {
+            await JSRuntime.InvokeVoidAsync("FillEllipse","myCanvas",top,left,r,color);
+        } else if (kind == 2) {
+            await JSRuntime.InvokeVoidAsync("FillTraiangle","myCanvas",top,left,width,color);
+        }
+    }
+
+    // One Shotボタンクリックイベントハンドラ
+    protected async Task OneShotBtnClick() {
+        await DrawFunc();
+        this.StateHasChanged();
+    }
+
+    // Clearボタンクリックイベントハンドラ
+    protected async Task ClearBtnClick() {
+        // Canvasのクリア(JScall)
+        await JSRuntime.InvokeVoidAsync("ClearCanvas","myCanvas");
+    }
+
+    // Canvasのマウスボタンダウンイベントハンドラ
+    protected async Task OnCanvasMouseDown(MouseEventArgs e) {
+        var retobj = await JSRuntime.InvokeAsync<ElementRect>("GetElementRect","myCanvas");
+        CanvasLeft = retobj.left;
+        CanvasTop = retobj.top;
+        (double X, double Y) = GetDrawPos(e.ClientX,e.ClientY);
+        if (!SpoitMode) {
+            // Canvasの位置・サイズ情報を取得(JSCall)-ブラウザの画面サイズ変更対応
+            // お絵かき中フラグオン
+            Pendown = true;
+            // イベントで取得した座標をBrowser座標系からCanvas座標に変換
+            mesg = "MouseDown\r\n";
+            mesg += $"X={X}, Y={Y}";
+            // 位置移動(JSCall)
+            await JSRuntime.InvokeVoidAsync("MoveToCanvas","myCanvas",X,Y);
+        } else {
+            SpoitMode = false;
+            try {
+                var imgdt = await JSRuntime.InvokeAsync<ImageData>("GetImageData","myCanvas",X,Y);
+                modeText = "";
+                int r = imgdt.data["0"];
+                int g = imgdt.data["1"];
+                int b = imgdt.data["2"];
+                DrawColor = $"#{r.ToString("x2")}{g.ToString("x2")}{b.ToString("x2")}";
+                mesg = $"R:{imgdt.data["0"]},G:{imgdt.data["1"]},B:{imgdt.data["2"]}";
+            } catch(Exception ex) {
+                mesg = ex.Message;
+            }
+        }
+    }
+
+    // Canvasのマウス移動イベントハンドラ
+    protected async Task OnCanvasMouseMove(MouseEventArgs e) {
+        // イベントで取得した座標をBrowser座標系からCanvas座標に変換
+        (double X, double Y) = GetDrawPos(e.ClientX,e.ClientY);
+        mesg = "MouseMove\r\n";
+        mesg += $"X={X}, Y={Y}\r\n";
+        mesg += $"Color={DrawColor}, Width={DrawWidth}";
+        if (Pendown) {  // お絵かき中なら
+            // 線を引く(JSCall)
+            await JSRuntime.InvokeVoidAsync("LineToCanvas","myCanvas",X,Y,DrawColor,DrawWidth);
+        }
+    }
+
+    // Canvasのマウスアップイベントハンドラ
+    protected async Task OnCanvasMouseUp(MouseEventArgs e) {
+        (double X, double Y) = GetDrawPos(e.ClientX,e.ClientY);
+        mesg = "MouseUp\r\n";
+        mesg += $"X={X}, Y={Y}\r\n";
+        if (Pendown) {
+            string mode = ModeFill ? "塗潰" : "線描";
+            mesg += $"Mode={mode}";
+            Pendown = false;    // お絵かき終了
+            // 図形のPathを閉じる(JSCall)
+            await JSRuntime.InvokeVoidAsync("ClosePath","myCanvas",ModeFill);
+        }
+    }
+
+    // 塗潰し/線描切替
+    protected void DrawModeChanged() {
+        ModeFill = !ModeFill;
+    }
+
+    protected void changeGetColorMode() {
+        SpoitMode = true;
+        modeText = "スポイトモード";
+    }
+
+    protected async Task OnTouchStart(TouchEventArgs e) {
+        var retobj = await JSRuntime.InvokeAsync<ElementRect>("GetElementRect","myCanvas");
+        CanvasLeft = retobj.left;
+        CanvasTop = retobj.top;
+        (double X, double Y) = GetDrawPos(e.TargetTouches[0].ClientX,e.TargetTouches[0].ClientY);
+        if (!SpoitMode) {
+            // Canvasの位置・サイズ情報を取得(JSCall)-ブラウザの画面サイズ変更対応
+            // お絵かき中フラグオン
+            Pendown = true;
+            // イベントで取得した座標をBrowser座標系からCanvas座標に変換
+            mesg = "MouseDown\r\n";
+            mesg += $"X={X}, Y={Y}";
+            // 位置移動(JSCall)
+            await JSRuntime.InvokeVoidAsync("MoveToCanvas","myCanvas",X,Y);
+        } else {
+            SpoitMode = false;
+            try {
+                var imgdt = await JSRuntime.InvokeAsync<ImageData>("GetImageData","myCanvas",X,Y);
+                modeText = "";
+                int r = imgdt.data["0"];
+                int g = imgdt.data["1"];
+                int b = imgdt.data["2"];
+                DrawColor = $"#{r.ToString("x2")}{g.ToString("x2")}{b.ToString("x2")}";
+                mesg = $"R:{imgdt.data["0"]},G:{imgdt.data["1"]},B:{imgdt.data["2"]}";
+            } catch(Exception ex) {
+                mesg = ex.Message;
+            }
+        }
+    }
+    protected async Task OnTouchMove(TouchEventArgs e) {
+        (double X, double Y) = GetDrawPos(e.TargetTouches[0].ClientX,e.TargetTouches[0].ClientY);
+        mesg = "MouseMove\r\n";
+        mesg += $"X={X}, Y={Y}\r\n";
+        mesg += $"Color={DrawColor}, Width={DrawWidth}";
+        if (Pendown) {  // お絵かき中なら
+            // 線を引く(JSCall)
+            await JSRuntime.InvokeVoidAsync("LineToCanvas","myCanvas",X,Y,DrawColor,DrawWidth);
+        }
+    }
+    protected async Task OnTouchEnd(TouchEventArgs e) {
+        if (Pendown) {
+            Pendown = false;
+            // 図形のPathを閉じる(JSCall)
+            await JSRuntime.InvokeVoidAsync("ClosePath","myCanvas",ModeFill);
+        }
+    }
+
+	protected async Task SaveAsFile() {
+		await JSRuntime.InvokeVoidAsync("SaveAsFile","myCanvas","image.png");
+	}
+
+    // Element位置・サイズ情報(Javascript Interop)
+    class ElementRect {
+        public double x { get; set; }
+        public double y { get; set; }
+        public double width { get; set; }
+        public double height { get; set; }
+        public double top { get; set; }
+        public double right { get; set; }
+        public double bottom { get; set; }
+        public double left { get; set; }
+        public override string ToString() {
+            return $"left={left}, top={top}, width={width}, height={height}";
+        }
+    }
+
+    class ImageData {
+        public Dictionary<string,int> data {get; set;}
+    }
+
+}

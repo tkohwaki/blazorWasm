@@ -1,0 +1,156 @@
+@page "/weather"
+@inject IJSRuntime JSRuntime
+@inject HttpClient client
+@using System.Linq;
+<h1>天気概要</h1>
+<div style="text-align:right">
+    <span style="padding-right:1em;font-size:xx-small">Powered by asp.net core blazor+Bing Maps+OpenWeather+DarkSky</span>
+</div>
+<p>
+    地図をクリックすると、その付近の天気情報が表示されます。(C#&lArr;&rArr;Javascript相互運用機能を利用)<br/>
+<a href="showsrc.php?FileName=Weather.razor&Return=weather">ソース</a>
+</p>
+<div id="myMap" style="width:1024px;height:480px;border-style:solid;border-width:1px;box-shadow:5px 5px rgba(0.5,0x80,0x80,0x80)">
+</div>
+<pre>
+@Mesg
+</pre>
+
+@code {
+    private string Mesg = "";
+    private double Latitude = Double.MinValue;
+    private double Longitude = Double.MinValue;
+    const string OPENWEATHER_KEY = "a08bfbecf0c95a2a741fa680cd25e172";
+    const string FORECAST_KEY = "769454dcb6c4512e7c72a3a5d93bc9f5";
+
+    protected override async Task OnAfterRenderAsync(bool first) {
+        if (first) {
+            // MAPのロードとクリックイベントの追加
+            await JSRuntime.InvokeVoidAsync("loadMap","myMap");
+            await JSRuntime.InvokeVoidAsync("AttachEvents","click",
+                DotNetObjectReference.Create(this),
+                "OnMapClicked"
+            );
+        }
+    }
+    //
+    //  MAPクリック時の処理
+    //
+    [JSInvokable]
+    public async Task OnMapClicked(double latitude, double longitude) {
+        Latitude = latitude;
+        Longitude = longitude;
+        // クリック地点のお天気情報を取得(OpenWeather)
+        string url = $"http://api.openweathermap.org/data/2.5/weather?lat={Latitude}&lon={Longitude}&lang=ja&units=metric&APPID={OPENWEATHER_KEY}";
+        var ans = await client.GetJsonAsync<WeatherAnswer>(url);
+        // お天気IconイメージURLの作成
+        string iconurl = $"http://openweathermap.org/img/wn/{ans.Weather[0].Icon}@2x.png";
+        // クリック地点のお天気情報を取得(Dark Sky⇒CORSに対応していないので、ワンクッション)
+        url = $"http://blazor.ohwaki.jp/GetWeatherInfo.php?id={FORECAST_KEY}&lat={Latitude}&lng={Longitude}";
+        var ans2 = await client.GetJsonAsync<ForeCastAnswer>(url);
+        // For Debug...
+        Mesg = "";
+        if (ans.Coord != null) {
+            Mesg += $"Location={ans.Coord.Lat},{ans.Coord.Lon}";
+        }
+        if (ans.Weather != null) {
+            Mesg += $",Weather={ans.Weather[0].Main}({ans.Weather[0].Description})";
+        }
+        if (ans.Main != null) {
+            Mesg += $",Temp={ans.Main.Temp}";
+        }
+        // InfoBox表示情報設定
+        var info = new boxInfo() {
+            latitude = latitude,
+            longitude = longitude,
+            title = "周辺の天気",
+            description = $@"
+            <div style='flex;justify-content:center;width:150px'>
+            <img src='{iconurl}'/>
+            </div>
+            <hr/>
+            <div style='width:150px'>{ans.Weather[0].Description}<br/>
+            気温:{ans.Main.Temp}&deg;C<br/>
+            最低気温:{ans.Main.Temp_min}&deg;C<br/>
+            最高気温:{ans.Main.Temp_max}&deg;C<br/>
+            湿度:{ans.Main.Humidity}%<br/>
+            降水確率:{ans2.Currently.PrecipProbability*100}%
+            </div>"
+        };
+        // InfoBoxの表示
+        await JSRuntime.InvokeVoidAsync("AddInfoBox",info);
+        this.StateHasChanged();
+    }
+
+    // InfoBox表示情報
+    class boxInfo {
+        public double latitude {get; set;}
+        public double longitude {get; set;}
+        public string title {get; set;}
+        public string description {get; set;}
+    }
+    // 天気情報(OpenWeather APIから返されるJSONのクラス化)
+    class WeatherAnswer {
+        public CoordInfo Coord {get; set; }
+        public List<WeatherInfo> Weather { get; set; }
+        public string Base {get; set; }
+        public MainInfo Main {get; set;}
+        public int Visibillity {get; set;}
+        public WindInfo Wind {get; set;}
+        public CloudInfo Clouds {get; set;}
+        public Dictionary<string,double> Rain {get; set;}
+        public Dictionary<string,double> Snow {get; set;}
+        public long Dt { get; set; }
+        public SysInfo Sys {get; set;}
+        public int TimeZone {get;set;}
+        public long Id {get; set;}
+        public string Name {get; set;}
+        public int Cod {get; set;}
+    }
+    class CoordInfo {
+        public double Lon {get; set;}
+        public double Lat {get; set;}
+    }
+    class WeatherInfo {
+        public int Id {get; set;}
+        public string Main {get; set;}
+        public string Description {get; set;}
+        public string Icon {get; set;}
+    }
+    class MainInfo {
+        public double Temp {get; set;}
+        public double Feel_likes {get; set;}
+        public double Temp_min {get; set;}
+        public double Temp_max {get; set;}
+        public double Pressure {get; set;}
+        public double Humidity {get; set;}
+    }
+    class WindInfo {
+        public double Speed {get; set;}
+        public int Deg {get; set;}
+    }
+    class CloudInfo {
+        public int All {get; set;}
+    }
+    class SysInfo {
+        public int Type {get; set;}
+        public int Id {get; set;}
+        public string Country {get; set;}
+        public long Sunrise {get; set;}
+        public long Sunset {get; set;}
+    }
+    // Dark Sky API回答用
+    class ForeCastAnswer {
+        public double Latitude {get; set;}
+        public double Longitude {get; set;}
+        public string Timezone {get; set;}
+        public ForeCastInfo Currently {get; set;}
+    }
+    class ForeCastInfo {
+        public long Time {get; set;}
+        public string Summary {get; set;}
+        public string Icon {get; set;}
+        public double PrecipProbability {get; set;}
+        public string PrecipType {get; set;}
+    }
+}
